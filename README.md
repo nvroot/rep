@@ -28,6 +28,7 @@ rep+ is a lightweight Chrome DevTools extension inspired by Burp Suite's Repeate
   Mark multiple parameters with `§`, choose your attack type, configure payloads (List or Numbers) for each position, and inspect detailed results for every attempt. Includes pause/resume functionality for long-running attacks.
 - **AI Capabilities**: Integrated with Anthropic's Claude to help you understand requests and responses.
   - **Explain Request**: Click the ✨ button to get a detailed explanation of the current request.
+  - **Suggest Attack Vectors**: Click the ▼ menu and select **Suggest Attack Vectors** to get a prioritized security checklist of potential vulnerabilities (IDOR, SQLi, etc.) tailored to the current request.
   - **Context Menu**: Highlight any text (header, parameter, error), right-click, and select **"Explain with AI"** for a targeted explanation.
   - **Streaming Responses**: Explanations appear in real-time.
   - **Configuration**: Configure your Anthropic API Key and Model (Claude 3.5 Sonnet, Opus, Haiku) in the Settings 🤖 menu.
