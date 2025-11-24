@@ -503,19 +503,68 @@ export function setupContextMenu() {
             }
         }
     });
+
+    // Handle submenu positioning
+    const submenuItems = elements.contextMenu.querySelectorAll('.context-menu-item.has-submenu');
+    submenuItems.forEach(item => {
+        item.addEventListener('mouseenter', () => {
+            const submenu = item.querySelector('.context-submenu');
+            if (!submenu) return;
+
+            // Reset first
+            item.classList.remove('submenu-align-bottom');
+
+            // Measure height
+            submenu.style.display = 'block';
+            submenu.style.visibility = 'hidden';
+            const submenuHeight = submenu.offsetHeight;
+            submenu.style.display = '';
+            submenu.style.visibility = '';
+
+            const rect = item.getBoundingClientRect();
+            const windowHeight = window.innerHeight;
+
+            // Check overflow with buffer
+            if (rect.top + submenuHeight + 10 > windowHeight) {
+                item.classList.add('submenu-align-bottom');
+            }
+        });
+    });
 }
 
 function showContextMenu(x, y, targetElement) {
     elements.contextMenu.dataset.target = targetElement === elements.rawRequestInput ? 'request' : 'response';
+
+    // Show first to measure, but keep invisible
+    elements.contextMenu.style.visibility = 'hidden';
     elements.contextMenu.classList.add('show');
     elements.contextMenu.classList.remove('open-left');
 
-    elements.contextMenu.style.left = x + 'px';
-    elements.contextMenu.style.top = y + 'px';
+    const menuWidth = elements.contextMenu.offsetWidth;
+    const menuHeight = elements.contextMenu.offsetHeight;
+    const windowWidth = window.innerWidth;
+    const windowHeight = window.innerHeight;
+
+    let left = x;
+    let top = y;
+
+    // Horizontal positioning
+    if (x + menuWidth > windowWidth) {
+        left = x - menuWidth;
+        elements.contextMenu.classList.add('open-left');
+    }
+
+    // Vertical positioning
+    if (y + menuHeight > windowHeight) {
+        top = y - menuHeight;
+    }
+
+    elements.contextMenu.style.left = `${left}px`;
+    elements.contextMenu.style.top = `${top}px`;
     elements.contextMenu.style.bottom = 'auto';
     elements.contextMenu.style.right = 'auto';
 
-    // ... (rest of positioning logic omitted for brevity, can be added if needed)
+    elements.contextMenu.style.visibility = 'visible';
 }
 
 function hideContextMenu() {
