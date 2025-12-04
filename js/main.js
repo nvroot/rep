@@ -29,6 +29,24 @@ document.addEventListener('DOMContentLoaded', () => {
     setupAIFeatures(elements);
     initSearch();
 
+    // Promotional Banner
+    const promoBanner = document.getElementById('promo-banner');
+    const closeBannerBtn = document.getElementById('close-banner');
+
+    // Check if banner was previously dismissed
+    const bannerDismissed = localStorage.getItem('repPlusBannerDismissed');
+    if (bannerDismissed === 'true') {
+        promoBanner.classList.add('hidden');
+    }
+
+    // Handle banner dismissal
+    if (closeBannerBtn) {
+        closeBannerBtn.addEventListener('click', () => {
+            promoBanner.classList.add('hidden');
+            localStorage.setItem('repPlusBannerDismissed', 'true');
+        });
+    }
+
     // Setup Network Listener (Current Tab)
     setupNetworkListener((request) => {
         // Auto-star if group is starred
@@ -82,9 +100,9 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    document.querySelectorAll('.filter-btn').forEach(btn => {
+    document.querySelectorAll('.filter-btn:not(#color-filter-btn)').forEach(btn => {
         btn.addEventListener('click', () => {
-            document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.filter-btn:not(#color-filter-btn)').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
             state.currentFilter = btn.dataset.filter;
             filterRequests();

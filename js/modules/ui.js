@@ -31,6 +31,152 @@ export function initUI() {
     elements.diffToggle = document.querySelector('.diff-toggle');
     elements.showDiffCheckbox = document.getElementById('show-diff');
     elements.toggleGroupsBtn = document.getElementById('toggle-groups-btn');
+    elements.colorFilterBtn = document.getElementById('color-filter-btn');
+
+    // Color Filter Logic
+    if (elements.colorFilterBtn) {
+        elements.colorFilterBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            // Close any existing popovers
+            document.querySelectorAll('.color-picker-popover').forEach(el => el.remove());
+
+            const popover = document.createElement('div');
+            popover.className = 'color-picker-popover';
+            popover.style.top = '100%';
+            popover.style.left = '0'; // Align left
+            popover.style.right = 'auto';
+
+            const colors = ['all', 'red', 'green', 'blue', 'yellow', 'purple', 'orange'];
+            const colorValues = {
+                'all': 'transparent',
+                'red': '#ff6b6b', 'green': '#51cf66', 'blue': '#4dabf7',
+                'yellow': '#ffd43b', 'purple': '#b197fc', 'orange': '#ff922b'
+            };
+
+            colors.forEach(color => {
+                const swatch = document.createElement('div');
+                swatch.className = `color-swatch ${color === 'all' ? 'none' : ''}`;
+                if (color !== 'all') swatch.style.backgroundColor = colorValues[color];
+                swatch.title = color === 'all' ? 'Show All' : color.charAt(0).toUpperCase() + color.slice(1);
+
+                // Highlight active filter
+                if (state.currentColorFilter === color) {
+                    swatch.style.border = '2px solid var(--accent-color)';
+                    swatch.style.transform = 'scale(1.1)';
+                }
+
+                swatch.onclick = (e) => {
+                    e.stopPropagation();
+                    state.currentColorFilter = color;
+
+                    // Update button style
+                    if (color === 'all') {
+                        elements.colorFilterBtn.classList.remove('active');
+                        elements.colorFilterBtn.style.color = '';
+                    } else {
+                        elements.colorFilterBtn.classList.add('active');
+                        elements.colorFilterBtn.style.color = colorValues[color];
+                    }
+
+                    filterRequests();
+                    popover.remove();
+                };
+                popover.appendChild(swatch);
+            });
+
+            elements.colorFilterBtn.appendChild(popover);
+            elements.colorFilterBtn.style.position = 'relative'; // Ensure popover positions correctly
+
+            // Close on click outside
+            const closeHandler = (e) => {
+                if (!popover.contains(e.target) && e.target !== elements.colorFilterBtn) {
+                    popover.remove();
+                    document.removeEventListener('click', closeHandler);
+                }
+            };
+            setTimeout(() => document.addEventListener('click', closeHandler), 0);
+        });
+    }
+
+    // Function to analyze attack surface for a specific domain
+    window.analyzeDomainAttackSurface = async function (domain, groupElement) {
+        if (state.isAnalyzingAttackSurface) return;
+
+        const { analyzeAttackSurface, cacheCategories } = await import('./attack-surface.js');
+
+        // Get all requests for this domain
+        const domainRequests = state.requests.filter((req, idx) => {
+            const reqHostname = getHostname(req.request?.url || req.pageUrl || '');
+            return reqHostname === domain;
+        });
+
+        if (domainRequests.length === 0) {
+            alert('No requests found for this domain.');
+            return;
+        }
+
+        const confirmed = confirm(
+            `Analyze ${domainRequests.length} request${domainRequests.length > 1 ? 's' : ''} from ${domain}?\n\n` +
+            `This will categorize requests by attack surface using your configured AI provider.\n` +
+            `Estimated tokens: ~${domainRequests.length * 100}`
+        );
+
+        if (!confirmed) return;
+
+        state.isAnalyzingAttackSurface = true;
+
+        // Show loading on AI button
+        const aiBtn = groupElement.querySelector('.group-ai-btn');
+        if (aiBtn) {
+            aiBtn.disabled = true;
+            aiBtn.innerHTML = '⏳';
+            aiBtn.title = 'Analyzing...';
+        }
+
+        try {
+            // Create a mapping of domain request indices to global indices
+            const requestIndexMap = {};
+            domainRequests.forEach((req) => {
+                const globalIndex = state.requests.indexOf(req);
+                const localIndex = domainRequests.indexOf(req);
+                requestIndexMap[localIndex] = globalIndex;
+            });
+
+            await analyzeAttackSurface(domainRequests, (progress) => {
+                if (progress.status === 'complete') {
+                    // Map local indices back to global indices
+                    Object.entries(progress.categories).forEach(([localIdx, categoryData]) => {
+                        const globalIdx = requestIndexMap[parseInt(localIdx)];
+                        state.attackSurfaceCategories[globalIdx] = categoryData;
+                    });
+
+                    cacheCategories(state.attackSurfaceCategories);
+                    state.domainsWithAttackSurface.add(domain);
+
+                    // Update AI button to "analyzed" state
+                    if (aiBtn) {
+                        aiBtn.disabled = false;
+                        aiBtn.classList.add('analyzed');
+                        aiBtn.title = 'Show Normal View';
+                        aiBtn.textContent = '📋';
+                    }
+
+                    // Re-render to show attack surface view for this domain
+                    filterRequests();
+                }
+            });
+        } catch (error) {
+            alert(`Analysis failed: ${error.message}`);
+            // Reset button on error
+            if (aiBtn) {
+                aiBtn.disabled = false;
+                aiBtn.textContent = '⚡';
+                aiBtn.title = 'Analyze Attack Surface';
+            }
+        } finally {
+            state.isAnalyzingAttackSurface = false;
+        }
+    };
 
     // View Tabs
     document.querySelectorAll('.view-tab').forEach(tab => {
@@ -163,13 +309,32 @@ export function toggleAllGroups() {
     const anyExpanded = allGroups.some(g => g.classList.contains('expanded'));
     const shouldExpand = !anyExpanded;
 
+    // Set a flag to prevent auto-expand from overriding this manual action
+    state.manuallyCollapsed = !shouldExpand;
+
     allGroups.forEach(group => {
         if (shouldExpand) {
             group.classList.add('expanded');
-            group.querySelector('.group-toggle').textContent = '▼';
+            const pageContent = group.querySelector('.page-content');
+            const domainContent = group.querySelector('.domain-content');
+            const pageToggle = group.querySelector('.page-toggle-btn');
+            const domainToggle = group.querySelector('.domain-toggle-btn');
+
+            if (pageContent) pageContent.style.display = 'block';
+            if (domainContent) domainContent.style.display = 'block';
+            if (pageToggle) pageToggle.classList.add('expanded');
+            if (domainToggle) domainToggle.style.transform = 'rotate(90deg)';
         } else {
             group.classList.remove('expanded');
-            group.querySelector('.group-toggle').textContent = '▶';
+            const pageContent = group.querySelector('.page-content');
+            const domainContent = group.querySelector('.domain-content');
+            const pageToggle = group.querySelector('.page-toggle-btn');
+            const domainToggle = group.querySelector('.domain-toggle-btn');
+
+            if (pageContent) pageContent.style.display = 'none';
+            if (domainContent) domainContent.style.display = 'none';
+            if (pageToggle) pageToggle.classList.remove('expanded');
+            if (domainToggle) domainToggle.style.transform = 'rotate(0deg)';
         }
     });
 }
@@ -239,11 +404,17 @@ function createPageGroup(pageUrl) {
 
     const header = document.createElement('div');
     header.className = 'page-header';
+
+    const hasAnalysis = state.domainsWithAttackSurface.has(pageHostname);
+
     header.innerHTML = `
         <span class="group-toggle">▶</span>
         <span class="page-icon">📄</span>
         <span class="page-name">${escapeHtml(pageHostname)}</span>
         <span class="page-count">(0)</span>
+        <button class="group-ai-btn ${hasAnalysis ? 'analyzed' : ''}" title="${hasAnalysis ? 'Show Normal View' : 'Analyze Attack Surface'}">
+            ${hasAnalysis ? '📋' : '⚡'}
+        </button>
         <button class="group-star-btn ${state.starredPages.has(pageHostname) ? 'active' : ''}" title="${state.starredPages.has(pageHostname) ? 'Unstar Group' : 'Star Group'}">
             ${state.starredPages.has(pageHostname) ? STAR_ICON_FILLED : STAR_ICON_OUTLINE}
         </button>
@@ -252,10 +423,36 @@ function createPageGroup(pageUrl) {
     const content = document.createElement('div');
     content.className = 'page-content';
 
-    header.addEventListener('click', () => {
+    header.addEventListener('click', (e) => {
+        // Don't toggle if clicking on buttons
+        if (e.target.closest('.group-ai-btn') || e.target.closest('.group-star-btn')) return;
+
         group.classList.toggle('expanded');
         const toggle = header.querySelector('.group-toggle');
         toggle.textContent = group.classList.contains('expanded') ? '▼' : '▶';
+    });
+
+    // AI button handler
+    const aiBtn = header.querySelector('.group-ai-btn');
+    aiBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+
+        const hasAnalysis = state.domainsWithAttackSurface.has(pageHostname);
+
+        if (hasAnalysis) {
+            // Toggle back to normal view
+            state.domainsWithAttackSurface.delete(pageHostname);
+            aiBtn.classList.remove('analyzed');
+            aiBtn.title = 'Analyze Attack Surface';
+            aiBtn.textContent = '⚡';
+
+            // Re-render requests for this domain
+            reRenderDomainRequests(pageHostname);
+            filterRequests();
+        } else {
+            // Analyze
+            await analyzeDomainAttackSurface(pageHostname, group);
+        }
     });
 
     const starBtn = header.querySelector('.group-star-btn');
@@ -307,11 +504,132 @@ function createDomainGroup(hostname, isThirdParty = false) {
 
     return group;
 }
+export function setRequestColor(index, color) {
+    if (state.requests[index]) {
+        state.requests[index].color = color;
 
-export function renderRequestItem(request, index) {
+        // Update DOM elements (both grouped and timeline view)
+        const items = elements.requestList.querySelectorAll(`.request-item[data-index="${index}"]`);
+        items.forEach(item => {
+            // Remove all color classes
+            item.classList.remove('color-red', 'color-green', 'color-blue', 'color-yellow', 'color-purple', 'color-orange');
+            if (color) {
+                item.classList.add(`color-${color}`);
+            }
+        });
+    }
+}
+
+/**
+ * Main function to render request list
+ */
+export function renderRequestList() {
+    filterRequests(); // Always use normal page-based view with optional attack surface per domain
+}
+
+/**
+ * Render requests grouped by attack surface category
+ */
+async function renderAttackSurfaceView() {
+    const { loadCachedCategories } = await import('./attack-surface.js');
+
+    elements.requestList.innerHTML = '';
+
+    // Load cached categories if not in state
+    if (Object.keys(state.attackSurfaceCategories).length === 0) {
+        state.attackSurfaceCategories = loadCachedCategories();
+    }
+
+    // Group requests by category
+    const categoryGroups = {};
+
+    state.requests.forEach((request, index) => {
+        const categoryData = state.attackSurfaceCategories[index];
+        const categoryName = categoryData?.category || 'Uncategorized';
+
+        if (!categoryGroups[categoryName]) {
+            categoryGroups[categoryName] = {
+                items: [],
+                icon: categoryData?.icon || '❓'
+            };
+        }
+
+        categoryGroups[categoryName].items.push({ request, index, categoryData });
+    });
+
+    // Generate a color for each category based on hash
+    const getCategoryColor = (categoryName) => {
+        const colors = [
+            '#ff6b6b', '#51cf66', '#4dabf7', '#ffd43b',
+            '#b197fc', '#ff922b', '#20c997', '#748ffc',
+            '#fa5252', '#94d82d', '#339af0', '#fcc419'
+        ];
+        let hash = 0;
+        for (let i = 0; i < categoryName.length; i++) {
+            hash = categoryName.charCodeAt(i) + ((hash << 5) - hash);
+        }
+        return colors[Math.abs(hash) % colors.length];
+    };
+
+    // Render each category group
+    Object.entries(categoryGroups).forEach(([categoryName, groupData]) => {
+        const color = getCategoryColor(categoryName);
+
+        const groupDiv = document.createElement('div');
+        groupDiv.className = 'attack-surface-group';
+
+        // Group header
+        const header = document.createElement('div');
+        header.className = 'attack-surface-header';
+        header.style.cssText = `
+            padding: 8px 10px;
+            background: ${color}15;
+            border-left: 4px solid ${color};
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: 600;
+            font-size: 13px;
+        `;
+
+        header.innerHTML = `
+            <span class="group-toggle">▼</span>
+            <span>${groupData.icon}</span>
+            <span>${categoryName}</span>
+            <span style="opacity: 0.6; font-size: 11px; margin-left: auto;">(${groupData.items.length})</span>
+        `;
+
+        // Group content
+        const content = document.createElement('div');
+        content.className = 'attack-surface-content';
+        content.style.display = 'block';
+
+        groupData.items.forEach(({ request, index, categoryData }) => {
+            const item = createRequestItemElement(request, index, categoryData);
+            content.appendChild(item);
+        });
+
+        // Toggle functionality
+        header.addEventListener('click', () => {
+            const isExpanded = content.style.display === 'block';
+            content.style.display = isExpanded ? 'none' : 'block';
+            header.querySelector('.group-toggle').textContent = isExpanded ? '▶' : '▼';
+        });
+
+        groupDiv.appendChild(header);
+        groupDiv.appendChild(content);
+        elements.requestList.appendChild(groupDiv);
+    });
+}
+
+
+
+export function createRequestItemElement(request, index, categoryData) {
     const item = document.createElement('div');
     item.className = 'request-item';
     if (request.starred) item.classList.add('starred');
+    if (request.color) item.classList.add(`color-${request.color}`);
     item.dataset.index = index;
     item.dataset.method = request.request.method;
 
@@ -361,6 +679,52 @@ export function renderRequestItem(request, index) {
         toggleStar(request);
     };
 
+    // Color Picker Button
+    const colorBtn = document.createElement('button');
+    colorBtn.className = 'color-btn';
+    colorBtn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M12 3c-4.97 0-9 4.03-9 9s4.03 9 9 9c.83 0 1.5-.67 1.5-1.5 0-.39-.15-.74-.39-1.01-.23-.26-.38-.61-.38-.99 0-.83.67-1.5 1.5-1.5H16c2.76 0 5-2.24 5-5 0-4.42-4.03-8-9-8zm-5.5 9c-.83 0-1.5-.67-1.5-1.5S5.67 9 6.5 9 8 9.67 8 10.5 7.33 12 6.5 12zm3-4C8.67 8 8 7.33 8 6.5S8.67 5 9.5 5s1.5.67 1.5 1.5S10.33 8 9.5 8zm5 0c-.83 0-1.5-.67-1.5-1.5S13.67 5 14.5 5s1.5.67 1.5 1.5S15.33 8 14.5 8zm3 4c-.83 0-1.5-.67-1.5-1.5S16.67 9 17.5 9s1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/></svg>';
+    colorBtn.title = 'Tag with color';
+
+    colorBtn.onclick = (e) => {
+        e.stopPropagation();
+        // Close any existing popovers
+        document.querySelectorAll('.color-picker-popover').forEach(el => el.remove());
+
+        const popover = document.createElement('div');
+        popover.className = 'color-picker-popover';
+
+        const colors = ['none', 'red', 'green', 'blue', 'yellow', 'purple', 'orange'];
+        const colorValues = {
+            'red': '#ff6b6b', 'green': '#51cf66', 'blue': '#4dabf7',
+            'yellow': '#ffd43b', 'purple': '#b197fc', 'orange': '#ff922b'
+        };
+
+        colors.forEach(color => {
+            const swatch = document.createElement('div');
+            swatch.className = `color-swatch ${color === 'none' ? 'none' : ''}`;
+            if (color !== 'none') swatch.style.backgroundColor = colorValues[color];
+            swatch.title = color.charAt(0).toUpperCase() + color.slice(1);
+
+            swatch.onclick = (e) => {
+                e.stopPropagation();
+                setRequestColor(index, color === 'none' ? null : color);
+                popover.remove();
+            };
+            popover.appendChild(swatch);
+        });
+
+        colorBtn.appendChild(popover);
+
+        // Close on click outside
+        const closeHandler = (e) => {
+            if (!popover.contains(e.target) && e.target !== colorBtn) {
+                popover.remove();
+                document.removeEventListener('click', closeHandler);
+            }
+        };
+        setTimeout(() => document.addEventListener('click', closeHandler), 0);
+    };
+
     // Timeline Filter Button
     const timelineBtn = document.createElement('button');
     timelineBtn.className = 'timeline-btn';
@@ -384,6 +748,7 @@ export function renderRequestItem(request, index) {
     numberSpan.style.textAlign = 'right';
 
     actionsDiv.appendChild(starBtn);
+    actionsDiv.appendChild(colorBtn);
     actionsDiv.appendChild(timelineBtn);
 
     item.appendChild(numberSpan);
@@ -393,6 +758,25 @@ export function renderRequestItem(request, index) {
     item.appendChild(actionsDiv);
 
     item.addEventListener('click', () => selectRequest(index));
+
+    // Add confidence badge if category data is provided
+    if (categoryData) {
+        const badge = document.createElement('span');
+        badge.className = `confidence-badge confidence-${categoryData.confidence}`;
+        badge.textContent = categoryData.confidence;
+        badge.title = categoryData.reasoning;
+        badge.style.cssText = 'margin-left: 6px; font-size: 9px; padding: 2px 4px; border-radius: 2px;';
+        // Insert after URL span (which is the 3rd child: number, method, url)
+        // numberSpan, methodSpan, urlSpan, timeSpan, actionsDiv
+        // We want it after urlSpan
+        item.insertBefore(badge, timeSpan);
+    }
+
+    return item;
+}
+
+export function renderRequestItem(request, index) {
+    const item = createRequestItemElement(request, index);
 
     // Remove empty state if present
     const emptyState = elements.requestList.querySelector('.empty-state');
@@ -460,6 +844,137 @@ export function renderRequestItem(request, index) {
     pageCountSpan.textContent = `(${pageCount + 1})`;
 
     filterRequests();
+}
+
+/**
+ * Render attack surface categories for a specific domain
+ */
+function renderDomainAttackSurface(pageContent, pageHostname) {
+    // Clear existing content
+    pageContent.innerHTML = '';
+
+    // Get all requests for this domain
+    const domainRequests = state.requests
+        .map((req, idx) => ({ req, idx }))
+        .filter(({ req }) => {
+            const reqHostname = getHostname(req.request?.url || req.pageUrl || '');
+            return reqHostname === pageHostname;
+        });
+
+    // Group by category
+    const categoryGroups = {};
+    domainRequests.forEach(({ req, idx }) => {
+        const categoryData = state.attackSurfaceCategories[idx];
+        const categoryName = categoryData?.category || 'Uncategorized';
+
+        if (!categoryGroups[categoryName]) {
+            categoryGroups[categoryName] = {
+                items: [],
+                icon: categoryData?.icon || '❓',
+                color: getCategoryColor(categoryName)
+            };
+        }
+
+        categoryGroups[categoryName].items.push({ req, idx, categoryData });
+    });
+
+    // Render each category
+    Object.entries(categoryGroups).forEach(([categoryName, groupData]) => {
+        const categoryDiv = document.createElement('div');
+        categoryDiv.className = 'attack-surface-category';
+        categoryDiv.style.cssText = `
+            margin: 4px 0;
+            border-left: 3px solid ${groupData.color};
+            background: ${groupData.color}10;
+        `;
+
+        const categoryHeader = document.createElement('div');
+        categoryHeader.style.cssText = `
+            padding: 4px 8px;
+            font-size: 11px;
+            font-weight: 600;
+            color: ${groupData.color};
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        `;
+        categoryHeader.innerHTML = `
+            <span class="category-toggle">▼</span>
+            <span>${groupData.icon}</span>
+            <span>${categoryName}</span>
+            <span style="opacity: 0.6; margin-left: auto;">(${groupData.items.length})</span>
+        `;
+
+        const categoryContent = document.createElement('div');
+        categoryContent.className = 'category-content';
+
+        groupData.items.forEach(({ req, idx, categoryData }) => {
+            // Create request item element without DOM insertion
+            const item = createRequestItemElement(req, idx, categoryData);
+
+            categoryContent.appendChild(item);
+        });
+
+
+
+        // Toggle functionality
+        categoryHeader.addEventListener('click', () => {
+            const isExpanded = categoryContent.style.display !== 'none';
+            categoryContent.style.display = isExpanded ? 'none' : 'block';
+            categoryHeader.querySelector('.category-toggle').textContent = isExpanded ? '▶' : '▼';
+        });
+
+        categoryDiv.appendChild(categoryHeader);
+        categoryDiv.appendChild(categoryContent);
+        pageContent.appendChild(categoryDiv);
+    });
+}
+
+/**
+ * Re-render requests for a specific domain (restore normal view)
+ */
+function reRenderDomainRequests(pageHostname) {
+    const pageGroupId = `page-${pageHostname.replace(/[^a-zA-Z0-9-]/g, '-')}`;
+    const pageGroup = document.getElementById(pageGroupId);
+
+    if (pageGroup) {
+        const pageContent = pageGroup.querySelector('.page-content');
+        if (pageContent) {
+            pageContent.innerHTML = ''; // Clear attack surface view
+
+            // Find all requests for this domain and re-render them
+            state.requests.forEach((req, idx) => {
+                const reqHostname = getHostname(req.request?.url || req.pageUrl || '');
+                // Check if request belongs to this page group (either as first-party or third-party)
+                const requestPageHostname = getHostname(req.pageUrl || req.request.url);
+
+                if (requestPageHostname === pageHostname) {
+                    // This request belongs to this page group
+                    // We need to use the original render logic which appends to the correct group
+                    // But renderRequestItem appends to DOM based on pageUrl/hostname
+                    // So we can just call it
+                    renderRequestItem(req, idx);
+                }
+            });
+        }
+    }
+}
+
+/**
+ * Generate a color for a category based on its name
+ */
+function getCategoryColor(categoryName) {
+    const colors = [
+        '#ff6b6b', '#51cf66', '#4dabf7', '#ffd43b',
+        '#b197fc', '#ff922b', '#20c997', '#748ffc',
+        '#fa5252', '#94d82d', '#339af0', '#fcc419'
+    ];
+    let hash = 0;
+    for (let i = 0; i < categoryName.length; i++) {
+        hash = categoryName.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    return colors[Math.abs(hash) % colors.length];
 }
 
 export function toggleStar(request) {
@@ -557,6 +1072,21 @@ export function selectRequest(index) {
 }
 
 export function filterRequests() {
+    // First, check if any domains have been analyzed and render them with attack surface view
+    state.domainsWithAttackSurface.forEach(domain => {
+        const pageGroupId = `page-${domain.replace(/[^a-zA-Z0-9-]/g, '-')}`;
+        const pageGroup = document.getElementById(pageGroupId);
+        if (pageGroup) {
+            const pageContent = pageGroup.querySelector('.page-content');
+            if (pageContent) {
+                // Only re-render if not already showing attack surface
+                if (!pageContent.querySelector('.attack-surface-category')) {
+                    renderDomainAttackSurface(pageContent, domain);
+                }
+            }
+        }
+    });
+
     const items = elements.requestList.querySelectorAll('.request-item');
     let visibleCount = 0;
     let regexError = false;
@@ -631,22 +1161,22 @@ export function filterRequests() {
                 // XHR filter: exclude images, fonts, and text files based on Content-Type and extension
                 let contentType = '';
                 if (request.response && request.response.headers) {
-                    const ctHeader = request.response.headers.find(h => 
+                    const ctHeader = request.response.headers.find(h =>
                         h.name.toLowerCase() === 'content-type'
                     );
                     if (ctHeader) {
                         contentType = ctHeader.value.toLowerCase();
                     }
                 }
-                
+
                 // Exclude image, font, and text content types
                 const excludeTypes = [
                     'image/', 'font/', 'text/html', 'text/plain', 'text/xml',
                     'application/font', 'application/x-font'
                 ];
-                
+
                 const isExcludedByContentType = excludeTypes.some(type => contentType.includes(type));
-                
+
                 // Also check by extension
                 const excludeExtensions = [
                     '.jpg', '.jpeg', '.png', '.gif', '.svg', '.webp', '.ico', '.bmp',
@@ -656,11 +1186,17 @@ export function filterRequests() {
                 const isExcludedByExtension = excludeExtensions.some(ext => {
                     return urlLower.endsWith(ext) || urlLower.includes(ext + '?');
                 });
-                
+
                 matchesFilter = !isExcludedByContentType && !isExcludedByExtension;
             } else {
                 matchesFilter = method === state.currentFilter;
             }
+        }
+
+        // Check color filter
+        let matchesColor = true;
+        if (state.currentColorFilter !== 'all') {
+            matchesColor = request.color === state.currentColorFilter;
         }
 
         // Check timeline filter
@@ -669,9 +1205,10 @@ export function filterRequests() {
             matchesTimeline = request.capturedAt <= state.timelineFilterTimestamp;
         }
 
-        if (matchesSearch && matchesFilter && matchesTimeline) {
+        if (matchesSearch && matchesFilter && matchesColor && matchesTimeline) {
             item.style.display = 'flex';
             visibleCount++;
+            // console.log(`[Filter Debug] Showing Req #${index}`);
         } else {
             item.style.display = 'none';
         }
@@ -682,6 +1219,14 @@ export function filterRequests() {
     domainGroups.forEach(group => {
         const hasVisibleItems = Array.from(group.querySelectorAll('.request-item')).some(item => item.style.display !== 'none');
         group.style.display = hasVisibleItems ? 'block' : 'none';
+
+        // Auto-expand domain groups when filtering (unless manually collapsed)
+        if (hasVisibleItems && !state.manuallyCollapsed && (state.currentFilter !== 'all' || state.currentColorFilter !== 'all' || state.currentSearchTerm)) {
+            const content = group.querySelector('.domain-content');
+            const toggleBtn = group.querySelector('.domain-toggle-btn');
+            if (content) content.style.display = 'block';
+            if (toggleBtn) toggleBtn.style.transform = 'rotate(90deg)';
+        }
     });
 
     // Update page groups visibility
@@ -690,7 +1235,22 @@ export function filterRequests() {
         const pageContent = group.querySelector('.page-content');
         const hasVisibleRequests = Array.from(pageContent.querySelectorAll(':scope > .request-item')).some(item => item.style.display !== 'none');
         const hasVisibleDomains = Array.from(pageContent.querySelectorAll('.domain-group')).some(domain => domain.style.display !== 'none');
-        group.style.display = (hasVisibleRequests || hasVisibleDomains) ? 'block' : 'none';
+        const hasVisibleAttackSurface = pageContent.querySelector('.attack-surface-category') !== null;
+
+        group.style.display = (hasVisibleRequests || hasVisibleDomains || hasVisibleAttackSurface) ? 'block' : 'none';
+
+        // Auto-expand page groups when filtering (unless manually collapsed)
+        if ((hasVisibleRequests || hasVisibleDomains || hasVisibleAttackSurface) && !state.manuallyCollapsed && (state.currentFilter !== 'all' || state.currentColorFilter !== 'all' || state.currentSearchTerm)) {
+            const toggleBtn = group.querySelector('.page-toggle-btn');
+            if (pageContent) pageContent.style.display = 'block';
+            if (toggleBtn) toggleBtn.classList.add('expanded');
+        }
+
+        if (hasVisibleRequests || hasVisibleDomains) {
+            // console.log(`[Filter Debug] Showing Page Group. Direct: ${hasVisibleRequests}, Domains: ${hasVisibleDomains}`);
+        } else {
+            // console.log(`[Filter Debug] Hiding Page Group`);
+        }
     });
 
     // Show error state if regex is invalid
@@ -708,19 +1268,26 @@ export function filterRequests() {
     const emptyState = elements.requestList.querySelector('.empty-state');
     if (visibleCount === 0 && items.length > 0) {
         if (!emptyState) {
-            const div = document.createElement('div');
-            div.className = 'empty-state';
-            div.textContent = regexError && state.useRegex && state.currentSearchTerm
-                ? 'Invalid regex pattern'
-                : 'No requests match your filter';
-            elements.requestList.appendChild(div);
-        } else {
-            emptyState.textContent = regexError && state.useRegex && state.currentSearchTerm
-                ? 'Invalid regex pattern'
-                : 'No requests match your filter';
+            const es = document.createElement('div');
+            es.className = 'empty-state';
+            elements.requestList.appendChild(es);
         }
-    } else if (emptyState && visibleCount > 0) {
-        emptyState.remove();
+        const es = elements.requestList.querySelector('.empty-state');
+
+        let message = 'No requests match your filter.';
+        const activeFilters = [];
+        if (state.currentFilter !== 'all') activeFilters.push(`Method: ${state.currentFilter}`);
+        if (state.currentColorFilter !== 'all') activeFilters.push(`Color: ${state.currentColorFilter}`);
+        if (state.currentSearchTerm) activeFilters.push(`Search: "${state.currentSearchTerm}"`);
+        if (state.timelineFilterTimestamp) activeFilters.push('Timeline Selection');
+
+        if (activeFilters.length > 0) {
+            message += `\n(${activeFilters.join(', ')})`;
+        }
+        es.textContent = message;
+        es.style.display = 'flex';
+    } else if (emptyState) {
+        emptyState.style.display = 'none';
     }
 }
 
@@ -798,6 +1365,7 @@ function sortRequestsChronologically() {
         const item = document.createElement('div');
         item.className = 'request-item';
         if (request.starred) item.classList.add('starred');
+        if (request.color) item.classList.add(`color-${request.color}`);
         item.dataset.index = index;
         item.dataset.method = request.request.method;
 
@@ -858,6 +1426,52 @@ function sortRequestsChronologically() {
             toggleStar(request);
         };
 
+        // Color Picker Button
+        const colorBtn = document.createElement('button');
+        colorBtn.className = 'color-btn';
+        colorBtn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M12 3c-4.97 0-9 4.03-9 9s4.03 9 9 9c.83 0 1.5-.67 1.5-1.5 0-.39-.15-.74-.39-1.01-.23-.26-.38-.61-.38-.99 0-.83.67-1.5 1.5-1.5H16c2.76 0 5-2.24 5-5 0-4.42-4.03-8-9-8zm-5.5 9c-.83 0-1.5-.67-1.5-1.5S5.67 9 6.5 9 8 9.67 8 10.5 7.33 12 6.5 12zm3-4C8.67 8 8 7.33 8 6.5S8.67 5 9.5 5s1.5.67 1.5 1.5S10.33 8 9.5 8zm5 0c-.83 0-1.5-.67-1.5-1.5S13.67 5 14.5 5s1.5.67 1.5 1.5S15.33 8 14.5 8zm3 4c-.83 0-1.5-.67-1.5-1.5S16.67 9 17.5 9s1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/></svg>';
+        colorBtn.title = 'Tag with color';
+
+        colorBtn.onclick = (e) => {
+            e.stopPropagation();
+            // Close any existing popovers
+            document.querySelectorAll('.color-picker-popover').forEach(el => el.remove());
+
+            const popover = document.createElement('div');
+            popover.className = 'color-picker-popover';
+
+            const colors = ['none', 'red', 'green', 'blue', 'yellow', 'purple', 'orange'];
+            const colorValues = {
+                'red': '#ff6b6b', 'green': '#51cf66', 'blue': '#4dabf7',
+                'yellow': '#ffd43b', 'purple': '#b197fc', 'orange': '#ff922b'
+            };
+
+            colors.forEach(color => {
+                const swatch = document.createElement('div');
+                swatch.className = `color-swatch ${color === 'none' ? 'none' : ''}`;
+                if (color !== 'none') swatch.style.backgroundColor = colorValues[color];
+                swatch.title = color.charAt(0).toUpperCase() + color.slice(1);
+
+                swatch.onclick = (e) => {
+                    e.stopPropagation();
+                    setRequestColor(index, color === 'none' ? null : color);
+                    popover.remove();
+                };
+                popover.appendChild(swatch);
+            });
+
+            colorBtn.appendChild(popover);
+
+            // Close on click outside
+            const closeHandler = (e) => {
+                if (!popover.contains(e.target) && e.target !== colorBtn) {
+                    popover.remove();
+                    document.removeEventListener('click', closeHandler);
+                }
+            };
+            setTimeout(() => document.addEventListener('click', closeHandler), 0);
+        };
+
         const timelineBtn = document.createElement('button');
         timelineBtn.className = 'timeline-btn';
         if (index === state.timelineFilterRequestIndex) {
@@ -878,6 +1492,7 @@ function sortRequestsChronologically() {
         numberSpan.style.cssText = 'margin-right: 8px; color: var(--text-secondary); font-size: 11px; min-width: 30px; display: inline-block; text-align: right;';
 
         actionsDiv.appendChild(starBtn);
+        actionsDiv.appendChild(colorBtn);
         actionsDiv.appendChild(timelineBtn);
 
         item.appendChild(numberSpan);
