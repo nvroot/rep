@@ -5064,6 +5064,48 @@ pre {
     color: #fff;
 }
 
+.llm-chat-apply-send-btn {
+    padding: 6px 12px;
+    background: var(--accent-color);
+    color: #000;
+    border: 1px solid var(--accent-color);
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+}
+
+.llm-chat-apply-send-btn:hover:not(:disabled) {
+    background: var(--accent-color);
+    filter: brightness(1.2);
+    opacity: 1;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+}
+
+.llm-chat-apply-send-btn:active:not(:disabled) {
+    transform: translateY(0);
+}
+
+.llm-chat-apply-send-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.llm-chat-apply-send-btn.applied {
+    background: var(--success-color, #4caf50);
+    border-color: var(--success-color, #4caf50);
+    color: #fff;
+}
+
+.llm-chat-apply-send-btn.error {
+    background: var(--error-color, #f44336);
+    border-color: var(--error-color, #f44336);
+    color: #fff;
+}
+
 .llm-chat-feedback {
     display: inline-block;
     padding: 4px 8px;
